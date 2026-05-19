@@ -8,7 +8,7 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.metrics import mean_absolute_error, r2_score
 from xgboost import XGBRegressor
 
-from ml.feature_engineering import run_feature_engineering
+from feature_engineering import run_feature_engineering
 from ml.utils import (
     TARGET_COL,
     CAT_COLS,

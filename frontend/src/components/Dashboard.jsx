@@ -1,122 +1,230 @@
-import { useEffect, useState } from 'react'
-
-import Navbar from './Navbar'
-import KPICards from './KPICards'
-import PredictionPanel from './PredictionPanel'
-import DeliveryMap from './DeliveryMap'
-import LiveEventFeed from './LiveEventFeed'
-
-import useWebSocket from '../hooks/useWebSocket'
+import { useEffect, useState } from "react";
+import Navbar from "./Navbar";
+import KPICards from "./KPICards";
+import ETAForm from "./ETAForm";
 
 import {
-  getAnalytics,
-  getModelMetrics
-} from '../services/api'
+  MapContainer,
+  TileLayer,
+  Marker,
+  Popup,
+  Polyline,
+  useMap
+} from "react-leaflet";
+
+import "leaflet/dist/leaflet.css";
+import L from "leaflet";
 
 import {
   ResponsiveContainer,
-  LineChart,
-  Line,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
-  Tooltip,
-  AreaChart,
-  Area,
-  BarChart,
-  Bar
-} from 'recharts'
+  Tooltip
+} from "recharts";
 
-function Dashboard() {
+import { getAnalytics, getModelMetrics } from "../services/api";
 
-  const [analytics, setAnalytics] = useState({})
-  const [metrics, setMetrics] = useState({})
+// =====================
+// LEAFLET ICON FIX
+// =====================
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl:
+    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  iconUrl:
+    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  shadowUrl:
+    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+});
 
-  const [events, setEvents] = useState([])
-
-  const [etaHistory, setEtaHistory] = useState([
-    { time: '10:00', eta: 24 },
-    { time: '10:05', eta: 26 },
-    { time: '10:10', eta: 28 },
-    { time: '10:15', eta: 25 },
-    { time: '10:20', eta: 31 },
-    { time: '10:25', eta: 29 }
-  ])
-
-  const [trafficData] = useState([
-    { zone: 'North', traffic: 4 },
-    { zone: 'South', traffic: 7 },
-    { zone: 'East', traffic: 6 },
-    { zone: 'West', traffic: 8 },
-    { zone: 'Central', traffic: 9 }
-  ])
+// =====================
+// MAP UPDATER
+// =====================
+function MapUpdater({ restaurant, customer }) {
+  const map = useMap();
 
   useEffect(() => {
+    if (!restaurant || !customer) return;
+    map.fitBounds([restaurant, customer], { padding: [80, 80] });
+  }, [restaurant, customer]);
 
-    fetchDashboardData()
+  return null;
+}
 
-    const interval = setInterval(() => {
-      fetchDashboardData()
-    }, 10000)
+// =====================
+// MAIN DASHBOARD
+// =====================
+function Dashboard() {
+  const [analytics, setAnalytics] = useState({});
+  const [metrics, setMetrics] = useState({});
+  const [loading, setLoading] = useState(false); // Keeps track of layout UI sync if needed
 
-    return () => clearInterval(interval)
+  const [mapCoords, setMapCoords] = useState({
+    restaurant: null,
+    customer: null
+  });
 
-  }, [])
+  const [city, setCity] = useState("Unknown City");
+  const [weather, setWeather] = useState(null);
+  const [trafficData, setTrafficData] = useState([]);
 
-  const fetchDashboardData = async () => {
+  // =====================
+  // INIT DATA
+  // =====================
+  useEffect(() => {
+    (async () => {
+      try {
+        setAnalytics(await getAnalytics());
+        setMetrics(await getModelMetrics());
+      } catch (err) {
+        console.error(err);
+      }
+    })();
+  }, []);
+
+  // =====================
+  // TRAFFIC INDEX
+  // =====================
+  const trafficMultiplier = (level) => {
+    switch (Number(level)) {
+      case 1: return 1.1;
+      case 2: return 1.4;
+      case 3: return 1.8;
+      default: return 1.2;
+    }
+  };
+
+  // =====================
+  // CITY INTELLIGENCE (weather + traffic)
+  // =====================
+  const fetchCityIntelligence = async (lat, lng, trafficLevel, cityName) => {
+    try {
+      setCity(cityName || "Detected Route");
+
+      const base = trafficMultiplier(trafficLevel);
+
+      setTrafficData([
+        { zone: "Central", index: base * 1.3 },
+        { zone: "North", index: base * 1.1 },
+        { zone: "South", index: base * 0.9 },
+        { zone: "East", index: base * 1.05 },
+        { zone: "West", index: base * 1.2 }
+      ]);
+
+      const res = await fetch(
+        `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current_weather=true`
+      );
+
+      const data = await res.json();
+      setWeather(data.current_weather);
+    } catch (err) {
+      console.error("City intelligence error:", err);
+    }
+  };
+
+  // =====================
+  // 🔔 FIXED PREDICT FLOW RECEIVER
+  // =====================
+  const handlePredictionSuccess = async (res) => {
+    if (!res || res.status === "error") {
+      console.error("Malformed payload received in Dashboard");
+      return;
+    }
+
+    console.log("📥 [Dashboard] Intercepted successful prediction backend data:", res);
 
     try {
+      // 1. UPDATE LEAFLET MAP COORDINATES
+      setMapCoords({
+        restaurant: [
+          res.restaurant_latitude,
+          res.restaurant_longitude
+        ],
+        customer: [
+          res.customer_latitude,
+          res.customer_longitude
+        ]
+      });
 
-      const analyticsData = await getAnalytics()
-      const metricsData = await getModelMetrics()
+      // 2. TRIGGER EXTRACTION FOR WEATHER & TRAFFIC
+      // Default to 5 if traffic_level isn't mirrored cleanly back by your custom backend
+      const responseTrafficLevel = res.traffic_level ?? 5; 
 
-      setAnalytics(analyticsData)
-      setMetrics(metricsData)
+      await fetchCityIntelligence(
+        res.customer_latitude,
+        res.customer_longitude,
+        responseTrafficLevel,
+        res.city
+      );
 
-    } catch (error) {
-
-      console.error('Dashboard fetch error:', error)
+    } catch (err) {
+      console.error("Error setting visual metrics layouts in dashboard:", err);
     }
-  }
+  };
 
-  useWebSocket((event) => {
+  // =====================
+  // MAP COMPONENT (INLINE)
+  // =====================
+  const DeliveryMap = () => {
+    if (!mapCoords.restaurant || !mapCoords.customer) {
+      return (
+        <div className="h-[500px] flex items-center justify-center text-gray-400 border border-slate-800 bg-slate-900 rounded-xl">
+          Waiting for route...
+        </div>
+      );
+    }
 
-    setEvents((prev) => [event, ...prev.slice(0, 14)])
+    return (
+      <div className="h-[500px] rounded-xl overflow-hidden border border-slate-800">
+        <MapContainer
+          center={mapCoords.restaurant}
+          zoom={12}
+          className="h-full w-full"
+        >
+          <TileLayer
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
 
-    setEtaHistory((prev) => {
+          <MapUpdater
+            restaurant={mapCoords.restaurant}
+            customer={mapCoords.customer}
+          />
 
-      const next = [
-        ...prev,
-        {
-          time: new Date().toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit'
-          }),
-          eta: Math.floor(Math.random() * 15) + 20
-        }
-      ]
+          <Marker position={mapCoords.restaurant}>
+            <Popup>Restaurant</Popup>
+          </Marker>
 
-      return next.slice(-8)
-    })
-  })
+          <Marker position={mapCoords.customer}>
+            <Popup>Customer</Popup>
+          </Marker>
+
+          <Polyline
+            positions={[
+              mapCoords.restaurant,
+              mapCoords.customer
+            ]}
+            color="#3b82f6"
+            weight={4}
+          />
+        </MapContainer>
+      </div>
+    );
+  };
 
   return (
-
     <div className="min-h-screen bg-slate-950 text-white">
-
       <Navbar />
 
       <div className="p-6 space-y-6">
-
-        <KPICards
-          analytics={analytics}
-          metrics={metrics}
-        />
+        <KPICards analytics={analytics} metrics={metrics} />
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-
-          <div className="xl:col-span-1">
-            <PredictionPanel />
+          <div>
+            {/* 🔔 MOUNTED UPDATED PROP PROPAGATION HERE */}
+            <ETAForm onPredictionSuccess={handlePredictionSuccess} />
           </div>
 
           <div className="xl:col-span-2">
@@ -124,164 +232,38 @@ function Dashboard() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        {/* TRAFFIC */}
+        <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl">
+          <h2 className="text-xl font-bold mb-4">{city} Traffic Index</h2>
 
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-
-            <div className="flex items-center justify-between mb-4">
-
-              <div>
-                <h2 className="text-xl font-bold">
-                  Live ETA Trend
-                </h2>
-
-                <p className="text-slate-400 text-sm">
-                  Real-time prediction movement
-                </p>
-              </div>
-            </div>
-
-            <div className="h-[320px]">
-
-              <ResponsiveContainer width="100%" height="100%">
-
-                <LineChart data={etaHistory}>
-
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-
-                  <XAxis
-                    dataKey="time"
-                    stroke="#94a3b8"
-                  />
-
-                  <YAxis
-                    stroke="#94a3b8"
-                  />
-
-                  <Tooltip />
-
-                  <Line
-                    type="monotone"
-                    dataKey="eta"
-                    strokeWidth={3}
-                  />
-
-                </LineChart>
-
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-
-            <div className="flex items-center justify-between mb-4">
-
-              <div>
-                <h2 className="text-xl font-bold">
-                  Traffic Heatmap
-                </h2>
-
-                <p className="text-slate-400 text-sm">
-                  City-wide congestion intelligence
-                </p>
-              </div>
-            </div>
-
-            <div className="h-[320px]">
-
-              <ResponsiveContainer width="100%" height="100%">
-
-                <BarChart data={trafficData}>
-
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-
-                  <XAxis
-                    dataKey="zone"
-                    stroke="#94a3b8"
-                  />
-
-                  <YAxis
-                    stroke="#94a3b8"
-                  />
-
-                  <Tooltip />
-
-                  <Bar
-                    dataKey="traffic"
-                  />
-
-                </BarChart>
-
-              </ResponsiveContainer>
-            </div>
-          </div>
+          <ResponsiveContainer width="100%" height={250}>
+            <BarChart data={trafficData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+              <XAxis dataKey="zone" stroke="#94a3b8" />
+              <YAxis stroke="#94a3b8" />
+              <Tooltip 
+                contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }}
+                labelStyle={{ color: '#fff' }}
+              />
+              <Bar dataKey="index" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
         </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-
-          <div className="xl:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-5">
-
-            <div className="mb-5">
-
-              <h2 className="text-xl font-bold">
-                Delivery Performance
-              </h2>
-
-              <p className="text-slate-400 text-sm">
-                Operational delivery analytics
-              </p>
-            </div>
-
-            <div className="h-[320px]">
-
-              <ResponsiveContainer width="100%" height="100%">
-
-                <AreaChart data={etaHistory}>
-
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-
-                  <XAxis
-                    dataKey="time"
-                    stroke="#94a3b8"
-                  />
-
-                  <YAxis
-                    stroke="#94a3b8"
-                  />
-
-                  <Tooltip />
-
-                  <Area
-                    type="monotone"
-                    dataKey="eta"
-                    strokeWidth={2}
-                  />
-
-                </AreaChart>
-
-              </ResponsiveContainer>
-            </div>
+        {/* WEATHER */}
+        <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl grid grid-cols-2 gap-4">
+          <div>
+            <h2 className="text-xl font-bold mb-2">Environmental Data</h2>
+            <p className="text-slate-400">Current Area: <span className="text-white font-medium">{city}</span></p>
           </div>
-
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-
-            <div className="mb-5">
-
-              <h2 className="text-xl font-bold">
-                Live Event Feed
-              </h2>
-
-              <p className="text-slate-400 text-sm">
-                Real-time operational updates
-              </p>
-            </div>
-
-            <LiveEventFeed events={events} />
+          <div className="flex justify-around items-center bg-slate-950 border border-slate-800 rounded-lg p-4">
+            <p className="text-sm text-slate-400">Temp: <span className="text-xl font-bold text-blue-400">{weather?.temperature ?? "--"} °C</span></p>
+            <p className="text-sm text-slate-400">Wind: <span className="text-xl font-bold text-blue-400">{weather?.windspeed ?? "--"} km/h</span></p>
           </div>
         </div>
       </div>
     </div>
-  )
+  );
 }
 
-export default Dashboard
+export default Dashboard;

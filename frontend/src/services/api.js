@@ -1,22 +1,32 @@
-import axios from 'axios'
+import axios from "axios";
 
 const API = axios.create({
-  baseURL: 'http://127.0.0.1:8000'
-})
+  baseURL: "http://127.0.0.1:8000",
+  timeout: 15000,
+  headers: {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  },
+});
 
-export const predictETA = async (payload) => {
-  const response = await API.post('/predict_eta', payload)
-  return response.data
-}
+API.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    console.error("API error:", error.response?.data || error.message);
+    return Promise.reject(error);
+  }
+);
 
-export const getAnalytics = async () => {
-  const response = await API.get('/analytics')
-  return response.data
-}
+export const predictETA = (payload) =>
+  API.post("/predict_eta", payload).then((res) => res.data);
 
-export const getModelMetrics = async () => {
-  const response = await API.get('/model/metrics')
-  return response.data
-}
+export const getAnalytics = () =>
+  API.get("/analytics").then((res) => res.data);
 
-export default API
+export const getModelMetrics = () =>
+  API.get("/model/metrics").then((res) => res.data);
+
+export const submitFeedback = (payload) =>
+  API.post("/submit_feedback", payload).then((res) => res.data);
+
+export default API;
