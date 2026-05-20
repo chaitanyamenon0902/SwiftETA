@@ -32,7 +32,7 @@
 
 <br/>
 
-**[Live Demo](https://swifteta.vercel.app)** • **[API Docs](https://swift-eta.onrender.com/docs)** • **[Report Bug](../../issues)** • **[Request Feature](../../issues)**
+**[Live Demo](swift-eta-gamma.vercel.app)** • **[Report Bug](../../issues)** • **[Request Feature](../../issues)**
 
 </div>
 
