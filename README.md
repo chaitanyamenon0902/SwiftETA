@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/swiftETA-logo.png" width="180"/>
+<img src="frontend/src/assets/logoswifteta.png" width="180"/>
 
 # SwiftETA
 
